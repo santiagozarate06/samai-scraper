@@ -173,10 +173,11 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     };
     context.on('response', onResp);
 
-    // Preparamos captura del evento download (la vía más fiel: como el usuario).
+    // Preparamos captura del evento download (por si samaicore responde con attachment).
     let descargado = false;
     const capturarDownload = async (d) => {
-      try { await d.saveAs(destino); descargado = true; } catch (e) { diag += `dl-save:${e.message}; `; }
+      try { await d.saveAs(destino); descargado = true; diag += 'via:download-event; '; }
+      catch (e) { diag += `dl-save:${e.message}; `; }
     };
     page.on('download', capturarDownload);
 
@@ -184,7 +185,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     await page.locator('table tbody tr').nth(objetivo.idx).locator('button, a').first().click().catch(() => {});
     await page.waitForTimeout(2500);
 
-    // Hallar y clicar el botón/enlace de DESCARGA del adjunto (dispara el token fresco)
+    // Hallar el link de descarga en el DOM (SIN clicar aún, para no quemar el token)
     const buscarLinkEnDom = () => page.evaluate(() => {
       for (const el of document.querySelectorAll('*')) {
         for (const attr of el.attributes || []) {
@@ -198,52 +199,57 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       return m ? m[0] : null;
     });
 
-    // Intentar clicar un botón de descarga real dentro de los adjuntos (varios selectores posibles)
-    const clicarDescarga = async () => {
-      const sels = [
-        'a[href*="DescargarProvidenciaSAMAI"]',
-        'button[onclick*="Descargar"]',
-        'a[onclick*="Descargar"]',
-        '[title*="escargar"]',
-        'img[src*="descargar"]',
-        'i.fa-download, i.fa-file-pdf',
-      ];
-      for (const s of sels) {
-        const el = page.locator(s).first();
-        if (await el.count().catch(() => 0)) {
-          await el.click({ timeout: 3000 }).catch(() => {});
-          return true;
-        }
-      }
-      return false;
-    };
-
-    // Reintentar: clic descarga → esperar → mirar si se interceptó/descargó
+    // Esperar a que los adjuntos carguen (sin clicar) y obtener la URL con el token fresco
     let urlPdf = null;
-    for (let i = 0; i < 6 && !descargado && !urlPdfInterceptada && !urlPdf; i++) {
-      await clicarDescarga();
-      await page.waitForTimeout(1800);
-      urlPdf = urlPdf || urlPdfInterceptada || (await buscarLinkEnDom());
+    for (let i = 0; i < 8 && !urlPdf; i++) {
+      await page.waitForTimeout(1200);
+      urlPdf = urlPdfInterceptada || (await buscarLinkEnDom());
     }
-    urlPdf = urlPdf || urlPdfInterceptada;
 
-    // Dar un margen para que el evento download termine de guardar
-    if (!descargado && urlPdf) await page.waitForTimeout(1500);
+    if (!urlPdf) {
+      context.off('request', onReq); context.off('response', onResp); page.off('download', capturarDownload);
+      resultado.error = `Anexo presente pero no se halló el link del PDF (¿reservado/clasificado?). [${diag}]`;
+      return resultado;
+    }
 
-    // Si no llegó por evento download, descargar por API reusando las cookies de sesión.
-    if (!descargado && urlPdf) {
+    // VÍA PRINCIPAL: navegar a la URL del PDF con el navegador (manda Sec-Fetch-Mode:navigate
+    // + cookies de sesión → lo que samaicore exige). Si es 302 al Blob, seguirlo con la sesión.
+    if (!descargado) {
       try {
-        const resp = await context.request.get(urlPdf, { timeout: 40000, headers: { Referer: BASE + '/' } });
-        const st = resp.status();
-        const ct = resp.headers()['content-type'] || '';
-        diag += `apiget status:${st} ct:${ct}; `;
+        const respNav = await page.goto(urlPdf, { waitUntil: 'commit', timeout: 40000 }).catch((e) => { diag += `goto:${e.message}; `; return null; });
+        await page.waitForTimeout(1500); // dar chance al evento download
+        if (!descargado && respNav) {
+          const st = respNav.status();
+          const ct = respNav.headers()['content-type'] || '';
+          diag += `goto-status:${st} ct:${ct}; `;
+          if (respNav.ok() && /pdf|octet-stream/i.test(ct)) {
+            fs.writeFileSync(destino, await respNav.body());
+            descargado = true; diag += 'via:goto; ';
+          }
+        }
+      } catch (e) { diag += `nav-error:${e.message}; `; }
+    }
+
+    // RESPALDO: pedirlo con context.request (reusa cookies de sesión) + headers de navegación
+    if (!descargado) {
+      try {
+        const resp = await context.request.get(urlPdf, {
+          timeout: 40000, maxRedirects: 5,
+          headers: {
+            Referer: BASE + '/',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Sec-Fetch-Site': 'same-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+          },
+        });
+        diag += `apiget status:${resp.status()} ct:${resp.headers()['content-type'] || ''}; `;
         if (resp.ok()) {
           const buf = await resp.body();
-          if (buf.slice(0, 4).toString() === '%PDF') { fs.writeFileSync(destino, buf); descargado = true; }
-          else diag += `nopdf-head:${buf.slice(0, 20).toString('hex')}; `;
+          if (buf.slice(0, 4).toString() === '%PDF') { fs.writeFileSync(destino, buf); descargado = true; diag += 'via:apiget; '; }
+          else diag += `nopdf-head:${buf.slice(0, 16).toString('hex')}; `;
         } else {
           const b = await resp.body().catch(() => Buffer.from(''));
-          diag += `body:${b.slice(0, 120).toString()}; `;
+          diag += `body:${b.slice(0, 80).toString()}; `;
         }
       } catch (e) { diag += `apiget-error:${e.message}; `; }
     }
@@ -251,11 +257,6 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     context.off('request', onReq);
     context.off('response', onResp);
     page.off('download', capturarDownload);
-
-    if (!urlPdf && !descargado) {
-      resultado.error = `Anexo presente pero no se halló el link del PDF (¿reservado/clasificado?). [${diag}]`;
-      return resultado;
-    }
 
     if (descargado && fs.existsSync(destino) && fs.readFileSync(destino).slice(0, 4).toString() === '%PDF') {
       resultado.ok = true;
