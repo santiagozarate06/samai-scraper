@@ -163,6 +163,15 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       if (u.includes('DescargarProvidenciaSAMAI')) urlPdfInterceptada = u;
     };
     context.on('request', onReq);
+    // Y capturamos la RESPUESTA que ve el navegador en ESA misma petición (para saber
+    // si el propio navegador recibe 403 → sería bloqueo por IP/entorno, no por token).
+    const onResp = async (resp) => {
+      const u = resp.url();
+      if (u.includes('DescargarProvidenciaSAMAI')) {
+        diag += `navResp status:${resp.status()} ct:${resp.headers()['content-type'] || ''}; `;
+      }
+    };
+    context.on('response', onResp);
 
     // Preparamos captura del evento download (la vía más fiel: como el usuario).
     let descargado = false;
@@ -240,6 +249,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     }
 
     context.off('request', onReq);
+    context.off('response', onResp);
     page.off('download', capturarDownload);
 
     if (!urlPdf && !descargado) {
@@ -252,7 +262,9 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       resultado.pdfPath = destino;
       log(`PDF descargado: ${destino}`);
     } else {
-      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] url:${(urlPdf || '').slice(0, 90)}`;
+      // Incluimos el token completo (para decodificar exp) y el instante actual.
+      const tok = (urlPdf || '').split('tokendoc=')[1] || '';
+      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] ahora:${Math.floor(Date.now()/1000)} token:${tok}`;
     }
     return resultado;
   } catch (e) {
