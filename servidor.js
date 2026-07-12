@@ -57,8 +57,11 @@ app.post('/consultar', async (req, res) => {
   try {
     // Carga diferida del scraper (así el arranque no depende de Playwright)
     const { consultarSamai } = await import('./samai.js');
+    // PRUEBA_PDF=1 fuerza tomar la última actuación CON anexo (solo para diagnóstico;
+    // en producción normal debe estar sin definir para mirar la verdadera última).
+    const forzarConAnexo = process.env.PRUEBA_PDF === '1';
     // Correr el scraper (headless en el servidor)
-    const r = await consultarSamai(radicado, { headless: true });
+    const r = await consultarSamai(radicado, { headless: true, forzarConAnexo });
 
     // Si hay PDF, lo devolvemos EN BASE64 para que n8n lo suba a Drive
     // (evita el problema de "cuota" de las cuentas de servicio de Google).

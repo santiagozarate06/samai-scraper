@@ -27,6 +27,7 @@ RUN mkdir -p /app/salida && chmod -R 777 /app/salida
 ENV PORT=8080
 EXPOSE 8080
 
-# Arranque a prueba de fallos (levanta un servidor mínimo primero, luego el real).
-# Si algo falla, el contenedor NO muere y expone el error en /error.
+# Arranque con diagnóstico: levanta un servidor mínimo primero (para no morir),
+# verifica Chromium, y luego arranca el servidor real. Si algo falla, expone el
+# error en /error en vez de dejar el contenedor muerto sin logs.
 CMD ["node", "arranque.js"]
