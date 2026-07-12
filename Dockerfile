@@ -11,8 +11,11 @@ RUN npm install --omit=dev
 # Copiar el resto del código
 COPY . .
 
-# El navegador ya viene en la imagen; aseguramos que Chromium esté disponible
-RUN npx playwright install chromium
+# El navegador (Chromium) YA viene en la imagen de Playwright, en la ruta que
+# el SDK espera. NO reinstalamos (eso causaría rutas/permisos incorrectos).
+
+# Crear la carpeta de salida con permisos de escritura (el PDF temporal se guarda ahí)
+RUN mkdir -p /app/salida && chmod -R 777 /app/salida
 
 # Puerto del servicio (EasyPanel lo mapea)
 ENV PORT=8080
