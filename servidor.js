@@ -20,10 +20,15 @@
 
 import express from 'express';
 import fs from 'fs';
-import { consultarSamai } from './samai.js';
+// NOTA: samai.js se importa de forma DIFERIDA (dentro del endpoint) para que,
+// si Playwright falla al cargar, el servidor igual arranque y responda /salud.
 
 const app = express();
 app.use(express.json({ limit: '25mb' })); // el PDF puede ser grande
+
+// Captura de errores no manejados: los imprime en vez de tumbar el proceso.
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
 
 const PORT = process.env.PORT || 8080;
 const API_TOKEN = process.env.API_TOKEN || '';
@@ -50,6 +55,8 @@ app.post('/consultar', async (req, res) => {
 
   console.log(`[${new Date().toISOString()}] Consultando ${radicado}...`);
   try {
+    // Carga diferida del scraper (así el arranque no depende de Playwright)
+    const { consultarSamai } = await import('./samai.js');
     // Correr el scraper (headless en el servidor)
     const r = await consultarSamai(radicado, { headless: true });
 
@@ -80,8 +87,9 @@ app.post('/consultar', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servicio SAMAI escuchando en el puerto ${PORT}`);
+// Escuchar en 0.0.0.0 (todas las interfaces) — necesario dentro de contenedores
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Servicio SAMAI escuchando en 0.0.0.0:${PORT}`);
   console.log(`  GET  /salud`);
   console.log(`  POST /consultar  { "radicado": "..." }`);
 });
