@@ -1,6 +1,8 @@
 # Imagen oficial de Playwright: ya trae Chromium + todas las librerías del sistema
 # que el navegador necesita (evita el dolor de instalarlas a mano en Linux).
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+# Forzamos linux/amd64 (arquitectura estándar de servidores) para evitar
+# problemas de manifest multi-plataforma al arrancar en EasyPanel.
+FROM --platform=linux/amd64 mcr.microsoft.com/playwright:v1.48.0-jammy
 
 WORKDIR /app
 
