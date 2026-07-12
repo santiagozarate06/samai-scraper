@@ -1,0 +1,14 @@
+{
+  "name": "samai-scraper",
+  "version": "1.0.0",
+  "description": "Servicio: consulta la última actuación de un proceso administrativo en SAMAI, descarga el PDF y lo sube a Google Drive. Producto emersai.com.",
+  "type": "module",
+  "scripts": {
+    "start": "node servidor.js",
+    "prueba": "PRUEBA_PDF=1 node samai.js 25899333300120250018000"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "playwright": "^1.48.0"
+  }
+}

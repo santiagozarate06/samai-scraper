@@ -1,0 +1,4 @@
+node_modules
+salida
+*.log
+.git
