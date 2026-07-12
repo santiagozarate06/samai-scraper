@@ -2,7 +2,11 @@
 # que el navegador necesita (evita el dolor de instalarlas a mano en Linux).
 # Forzamos linux/amd64 (arquitectura estándar de servidores) para evitar
 # problemas de manifest multi-plataforma al arrancar en EasyPanel.
+# La versión de la imagen DEBE coincidir con la de playwright en package.json.
 FROM --platform=linux/amd64 mcr.microsoft.com/playwright:v1.48.0-jammy
+
+# Fijamos npm a la misma versión de Playwright que la imagen (evita el desajuste
+# "Executable doesn't exist" cuando npm instala una versión más nueva).
 
 WORKDIR /app
 
