@@ -150,12 +150,33 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       return resultado;
     }
 
-    // --- Abrir la actuación y hallar el link del PDF ---
+    // --- Abrir la actuación (clic en su botón "Ver") para que carguen los adjuntos ---
     resultado.tienePdf = true;
-    await page.locator('table tbody tr').nth(objetivo.idx).locator('button, a').first().click().catch(() => {});
+    const destino = path.join(dirSalida, `${radicado}_${resultado.ultimaActuacion.indice}.pdf`);
+    let diag = '';
 
-    // Buscar el link del PDF, reintentando (a veces los adjuntos tardan en cargar)
-    const buscarLink = () => page.evaluate(() => {
+    // Capturamos CUALQUIER request a samaicore para obtener el token FRESCO en el
+    // momento exacto en que la página lo genera (el JWT expira rápido).
+    let urlPdfInterceptada = null;
+    const onReq = (req) => {
+      const u = req.url();
+      if (u.includes('DescargarProvidenciaSAMAI')) urlPdfInterceptada = u;
+    };
+    context.on('request', onReq);
+
+    // Preparamos captura del evento download (la vía más fiel: como el usuario).
+    let descargado = false;
+    const capturarDownload = async (d) => {
+      try { await d.saveAs(destino); descargado = true; } catch (e) { diag += `dl-save:${e.message}; `; }
+    };
+    page.on('download', capturarDownload);
+
+    // Clic en "Ver" de la actuación objetivo (abre la sección de archivos adjuntos)
+    await page.locator('table tbody tr').nth(objetivo.idx).locator('button, a').first().click().catch(() => {});
+    await page.waitForTimeout(2500);
+
+    // Hallar y clicar el botón/enlace de DESCARGA del adjunto (dispara el token fresco)
+    const buscarLinkEnDom = () => page.evaluate(() => {
       for (const el of document.querySelectorAll('*')) {
         for (const attr of el.attributes || []) {
           if (attr.value && attr.value.includes('DescargarProvidenciaSAMAI')) {
@@ -168,41 +189,62 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       return m ? m[0] : null;
     });
 
-    let urlPdf = null;
-    for (let i = 0; i < 6 && !urlPdf; i++) {
-      await page.waitForTimeout(1500);
-      urlPdf = await buscarLink();
-    }
-
-    if (!urlPdf) {
-      resultado.error = 'La actuación tiene anexo pero no se halló el link del PDF (¿reservado/clasificado?).';
-      return resultado;
-    }
-
-    // --- Descargar el PDF (navegando, por el CORS de samaicore) ---
-    const destino = path.join(dirSalida, `${radicado}_${resultado.ultimaActuacion.indice}.pdf`);
-    const pagePdf = await context.newPage();
-    let descargado = false;
-    let diag = '';
-    pagePdf.on('download', async (d) => { await d.saveAs(destino); descargado = true; });
-    try {
-      const respPdf = await pagePdf.goto(urlPdf, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch((e) => { diag += `goto-error:${e.message}; `; return null; });
-      if (!descargado && respPdf) {
-        const ct = respPdf.headers()['content-type'] || '';
-        const st = respPdf.status();
-        diag += `status:${st} ct:${ct}; `;
-        if (respPdf.ok() && /pdf|octet-stream/i.test(ct)) {
-          fs.writeFileSync(destino, await respPdf.body());
-          descargado = true;
-        } else if (!respPdf.ok()) {
-          // Cuerpo del error (puede ser JSON con el motivo, ej token expirado)
-          const body = await respPdf.body().catch(() => Buffer.from(''));
-          diag += `body:${body.slice(0, 200).toString()}; `;
+    // Intentar clicar un botón de descarga real dentro de los adjuntos (varios selectores posibles)
+    const clicarDescarga = async () => {
+      const sels = [
+        'a[href*="DescargarProvidenciaSAMAI"]',
+        'button[onclick*="Descargar"]',
+        'a[onclick*="Descargar"]',
+        '[title*="escargar"]',
+        'img[src*="descargar"]',
+        'i.fa-download, i.fa-file-pdf',
+      ];
+      for (const s of sels) {
+        const el = page.locator(s).first();
+        if (await el.count().catch(() => 0)) {
+          await el.click({ timeout: 3000 }).catch(() => {});
+          return true;
         }
       }
-      await pagePdf.waitForTimeout(1500);
-    } finally {
-      await pagePdf.close().catch(() => {});
+      return false;
+    };
+
+    // Reintentar: clic descarga → esperar → mirar si se interceptó/descargó
+    let urlPdf = null;
+    for (let i = 0; i < 6 && !descargado && !urlPdfInterceptada && !urlPdf; i++) {
+      await clicarDescarga();
+      await page.waitForTimeout(1800);
+      urlPdf = urlPdf || urlPdfInterceptada || (await buscarLinkEnDom());
+    }
+    urlPdf = urlPdf || urlPdfInterceptada;
+
+    // Dar un margen para que el evento download termine de guardar
+    if (!descargado && urlPdf) await page.waitForTimeout(1500);
+
+    // Si no llegó por evento download, descargar por API reusando las cookies de sesión.
+    if (!descargado && urlPdf) {
+      try {
+        const resp = await context.request.get(urlPdf, { timeout: 40000, headers: { Referer: BASE + '/' } });
+        const st = resp.status();
+        const ct = resp.headers()['content-type'] || '';
+        diag += `apiget status:${st} ct:${ct}; `;
+        if (resp.ok()) {
+          const buf = await resp.body();
+          if (buf.slice(0, 4).toString() === '%PDF') { fs.writeFileSync(destino, buf); descargado = true; }
+          else diag += `nopdf-head:${buf.slice(0, 20).toString('hex')}; `;
+        } else {
+          const b = await resp.body().catch(() => Buffer.from(''));
+          diag += `body:${b.slice(0, 120).toString()}; `;
+        }
+      } catch (e) { diag += `apiget-error:${e.message}; `; }
+    }
+
+    context.off('request', onReq);
+    page.off('download', capturarDownload);
+
+    if (!urlPdf && !descargado) {
+      resultado.error = `Anexo presente pero no se halló el link del PDF (¿reservado/clasificado?). [${diag}]`;
+      return resultado;
     }
 
     if (descargado && fs.existsSync(destino) && fs.readFileSync(destino).slice(0, 4).toString() === '%PDF') {
@@ -210,7 +252,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       resultado.pdfPath = destino;
       log(`PDF descargado: ${destino}`);
     } else {
-      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] url:${urlPdf.slice(0, 80)}`;
+      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] url:${(urlPdf || '').slice(0, 90)}`;
     }
     return resultado;
   } catch (e) {
