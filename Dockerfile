@@ -23,4 +23,6 @@ RUN mkdir -p /app/salida && chmod -R 777 /app/salida
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["node", "servidor.js"]
+# Arranque a prueba de fallos (levanta un servidor mínimo primero, luego el real).
+# Si algo falla, el contenedor NO muere y expone el error en /error.
+CMD ["node", "arranque.js"]
