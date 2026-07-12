@@ -183,14 +183,21 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     const destino = path.join(dirSalida, `${radicado}_${resultado.ultimaActuacion.indice}.pdf`);
     const pagePdf = await context.newPage();
     let descargado = false;
+    let diag = '';
     pagePdf.on('download', async (d) => { await d.saveAs(destino); descargado = true; });
     try {
-      const respPdf = await pagePdf.goto(urlPdf, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => null);
+      const respPdf = await pagePdf.goto(urlPdf, { waitUntil: 'domcontentloaded', timeout: 40000 }).catch((e) => { diag += `goto-error:${e.message}; `; return null; });
       if (!descargado && respPdf) {
         const ct = respPdf.headers()['content-type'] || '';
+        const st = respPdf.status();
+        diag += `status:${st} ct:${ct}; `;
         if (respPdf.ok() && /pdf|octet-stream/i.test(ct)) {
           fs.writeFileSync(destino, await respPdf.body());
           descargado = true;
+        } else if (!respPdf.ok()) {
+          // Cuerpo del error (puede ser JSON con el motivo, ej token expirado)
+          const body = await respPdf.body().catch(() => Buffer.from(''));
+          diag += `body:${body.slice(0, 200).toString()}; `;
         }
       }
       await pagePdf.waitForTimeout(1500);
@@ -203,7 +210,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       resultado.pdfPath = destino;
       log(`PDF descargado: ${destino}`);
     } else {
-      resultado.error = 'No se pudo descargar el PDF.';
+      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] url:${urlPdf.slice(0, 80)}`;
     }
     return resultado;
   } catch (e) {
