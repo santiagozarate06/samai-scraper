@@ -123,23 +123,13 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     }
     resultado.encontrado = true;
 
-    // Elegir la última actuación (fila 0 = más reciente)
+    // Elegir la última actuación (fila 0 = más reciente). En producción SIEMPRE es esta.
     let objetivo = filas[0];
     if (forzarConAnexo) {
+      // Solo para diagnóstico (PRUEBA_PDF): forzar una actuación CON anexo aunque no sea
+      // la última, para poder ejercitar la descarga. En producción no se usa.
       const tieneAnexo = (f) => f.celdas.some((c) => /^\d+$/.test(c) && +c >= 1 && +c <= 20);
-      // Diagnóstico: listar actuaciones con anexo y su fila (para saber qué hay disponible)
-      if (process.env.PRUEBA_PDF === '2') {
-        const conAnexo = filas.filter(tieneAnexo).slice(0, 8)
-          .map((f) => `[idx${f.idx}:${f.celdas.map((x) => x.slice(0, 14)).join('|')}]`);
-        resultado._diagFilas = conAnexo;
-      }
-      // PRUEBA_PDF=2 → forzar una actuación con anexo que NO sea clasificada/reservada
-      // (para probar la descarga de un PDF público). PRUEBA_PDF=1 → la primera con anexo.
-      let cand = null;
-      if (process.env.PRUEBA_PDF === '2') {
-        cand = filas.find((f) => tieneAnexo(f) && !/clasificad|reservad/i.test(f.celdas.join(' ')));
-      }
-      cand = cand || filas.find(tieneAnexo);
+      const cand = filas.find(tieneAnexo);
       if (cand) objetivo = cand;
     }
 

@@ -57,9 +57,9 @@ app.post('/consultar', async (req, res) => {
   try {
     // Carga diferida del scraper (así el arranque no depende de Playwright)
     const { consultarSamai } = await import('./samai.js');
-    // PRUEBA_PDF=1 fuerza tomar la última actuación CON anexo; =2 fuerza una con anexo
-    // PÚBLICA (para probar descarga). Solo diagnóstico; en producción debe estar sin definir.
-    const forzarConAnexo = process.env.PRUEBA_PDF === '1' || process.env.PRUEBA_PDF === '2';
+    // PRUEBA_PDF=1 fuerza tomar una actuación CON anexo (solo diagnóstico).
+    // En producción debe estar SIN definir → mira la verdadera última actuación.
+    const forzarConAnexo = process.env.PRUEBA_PDF === '1';
     // Correr el scraper (headless en el servidor)
     const r = await consultarSamai(radicado, { headless: true, forzarConAnexo });
 
@@ -84,7 +84,6 @@ app.post('/consultar', async (req, res) => {
       pdfNombre,        // nombre sugerido del archivo
       pdfBase64,        // ← el PDF en base64; n8n lo convierte y sube a Drive
       error: r.error,
-      _diagFilas: r._diagFilas, // solo con PRUEBA_PDF=2, para diagnóstico
     });
   } catch (e) {
     console.error('Error:', e.message);
