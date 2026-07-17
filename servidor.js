@@ -57,9 +57,9 @@ app.post('/consultar', async (req, res) => {
   try {
     // Carga diferida del scraper (así el arranque no depende de Playwright)
     const { consultarSamai } = await import('./samai.js');
-    // PRUEBA_PDF=1 fuerza tomar la última actuación CON anexo (solo para diagnóstico;
-    // en producción normal debe estar sin definir para mirar la verdadera última).
-    const forzarConAnexo = process.env.PRUEBA_PDF === '1';
+    // PRUEBA_PDF=1 fuerza tomar la última actuación CON anexo; =2 fuerza una con anexo
+    // PÚBLICA (para probar descarga). Solo diagnóstico; en producción debe estar sin definir.
+    const forzarConAnexo = process.env.PRUEBA_PDF === '1' || process.env.PRUEBA_PDF === '2';
     // Correr el scraper (headless en el servidor)
     const r = await consultarSamai(radicado, { headless: true, forzarConAnexo });
 

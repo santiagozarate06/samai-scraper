@@ -126,8 +126,15 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     // Elegir la última actuación (fila 0 = más reciente)
     let objetivo = filas[0];
     if (forzarConAnexo) {
-      const conAnexo = filas.find((f) => f.celdas.some((c) => /^\d+$/.test(c) && +c >= 1 && +c <= 20));
-      if (conAnexo) objetivo = conAnexo;
+      const tieneAnexo = (f) => f.celdas.some((c) => /^\d+$/.test(c) && +c >= 1 && +c <= 20);
+      // PRUEBA_PDF=2 → forzar una actuación con anexo que NO sea clasificada/reservada
+      // (para probar la descarga de un PDF público). PRUEBA_PDF=1 → la primera con anexo.
+      let cand = null;
+      if (process.env.PRUEBA_PDF === '2') {
+        cand = filas.find((f) => tieneAnexo(f) && !/clasificad|reservad/i.test(f.celdas.join(' ')));
+      }
+      cand = cand || filas.find(tieneAnexo);
+      if (cand) objetivo = cand;
     }
 
     // Parsear celdas: [_, fechaReg, fechaAct, tipo, anotacion, estado, anexos, indice]
