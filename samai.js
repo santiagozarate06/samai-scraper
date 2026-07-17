@@ -51,6 +51,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     encontrado: false,
     ultimaActuacion: null,
     tienePdf: false,
+    pdfReservado: false, // true si el documento existe pero es reservado/clasificado
     pdfPath: null,
     error: null,
   };
@@ -183,45 +184,70 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
 
     // Clic en "Ver" de la actuación objetivo (abre la sección de archivos adjuntos)
     await page.locator('table tbody tr').nth(objetivo.idx).locator('button, a').first().click().catch(() => {});
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(3000);
 
-    // Hallar el link de descarga en el DOM (SIN clicar aún, para no quemar el token)
-    const buscarLinkEnDom = () => page.evaluate(() => {
-      for (const el of document.querySelectorAll('*')) {
-        for (const attr of el.attributes || []) {
-          if (attr.value && attr.value.includes('DescargarProvidenciaSAMAI')) {
-            const m = attr.value.match(/https?:\/\/[^"'\s)]*DescargarProvidenciaSAMAI[^"'\s)]*/);
-            if (m) return m[0];
+    // Leer la tabla de "Archivos adjuntos": para cada adjunto, su descripción, su
+    // tipo de publicidad (Público/Reservado/Clasificado) y su link de descarga.
+    // SAMAI SOLO deja descargar los PÚBLICOS sin login; los clasificados/reservados
+    // dan 403 incluso para un usuario logueado sin permisos (confirmado en pantalla).
+    const adjuntos = await page.evaluate(() => {
+      const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const out = [];
+      for (const tr of document.querySelectorAll('table tr')) {
+        const filaTxt = norm(tr.innerText).toLowerCase();
+        // buscar el link de descarga dentro de la fila
+        let link = null;
+        for (const el of tr.querySelectorAll('*')) {
+          for (const attr of el.attributes || []) {
+            if (attr.value && attr.value.includes('DescargarProvidenciaSAMAI')) {
+              const m = attr.value.match(/https?:\/\/[^"'\s)]*DescargarProvidenciaSAMAI[^"'\s)]*/);
+              if (m) { link = m[0]; break; }
+            }
           }
+          if (link) break;
         }
+        if (!link) continue; // solo filas que son un adjunto real
+        // detectar publicidad por el texto de la fila
+        let publicidad = 'desconocido';
+        if (/clasificad/.test(filaTxt)) publicidad = 'clasificado';
+        else if (/reservad/.test(filaTxt)) publicidad = 'reservado';
+        else if (/p[uú]blic/.test(filaTxt)) publicidad = 'publico';
+        out.push({ publicidad, link, texto: norm(tr.innerText).slice(0, 120) });
       }
-      const m = document.documentElement.innerHTML.match(/https?:\/\/[^"'\s)]*DescargarProvidenciaSAMAI[^"'\s)]*/);
-      return m ? m[0] : null;
+      return out;
     });
+    diag += `adjuntos:${adjuntos.length}(${adjuntos.map(a => a.publicidad).join(',')}); `;
 
-    // Esperar a que los adjuntos carguen (sin clicar) y obtener la URL con el token fresco
-    let urlPdf = null;
-    for (let i = 0; i < 8 && !urlPdf; i++) {
-      await page.waitForTimeout(1200);
-      urlPdf = urlPdfInterceptada || (await buscarLinkEnDom());
+    // Elegir el primer adjunto PÚBLICO (los otros no se pueden bajar sin permisos)
+    const publico = adjuntos.find((a) => a.publicidad === 'publico');
+    const urlPdf = publico ? publico.link : (adjuntos[0] ? adjuntos[0].link : urlPdfInterceptada);
+
+    // Si hay adjuntos pero NINGUNO es público → documento reservado/clasificado.
+    if (adjuntos.length && !publico) {
+      context.off('request', onReq); context.off('response', onResp); page.off('download', capturarDownload);
+      resultado.ok = true;               // no es error: es el comportamiento esperado
+      resultado.tienePdf = false;        // no hay PDF descargable
+      resultado.pdfReservado = true;     // marca para que n8n avise "míralo con tu cuenta"
+      resultado.ultimaActuacion.publicidad = adjuntos[0].publicidad;
+      log(`Documento ${adjuntos[0].publicidad}: no descargable sin permisos.`);
+      return resultado;
     }
 
     if (!urlPdf) {
       context.off('request', onReq); context.off('response', onResp); page.off('download', capturarDownload);
-      resultado.error = `Anexo presente pero no se halló el link del PDF (¿reservado/clasificado?). [${diag}]`;
+      resultado.error = `Anexo presente pero no se halló el link del PDF. [${diag}]`;
       return resultado;
     }
+    resultado.ultimaActuacion.publicidad = publico ? 'publico' : 'desconocido';
 
-    // VÍA PRINCIPAL: navegar a la URL del PDF con el navegador (manda Sec-Fetch-Mode:navigate
-    // + cookies de sesión → lo que samaicore exige). Si es 302 al Blob, seguirlo con la sesión.
+    // Descargar el PDF público: navegación real (Sec-Fetch:navigate + cookies de sesión).
     if (!descargado) {
       try {
         const respNav = await page.goto(urlPdf, { waitUntil: 'commit', timeout: 40000 }).catch((e) => { diag += `goto:${e.message}; `; return null; });
-        await page.waitForTimeout(1500); // dar chance al evento download
+        await page.waitForTimeout(1500);
         if (!descargado && respNav) {
-          const st = respNav.status();
           const ct = respNav.headers()['content-type'] || '';
-          diag += `goto-status:${st} ct:${ct}; `;
+          diag += `goto-status:${respNav.status()} ct:${ct}; `;
           if (respNav.ok() && /pdf|octet-stream/i.test(ct)) {
             fs.writeFileSync(destino, await respNav.body());
             descargado = true; diag += 'via:goto; ';
@@ -230,7 +256,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       } catch (e) { diag += `nav-error:${e.message}; `; }
     }
 
-    // RESPALDO: pedirlo con context.request (reusa cookies de sesión) + headers de navegación
+    // Respaldo: context.request con headers de navegación (reusa cookies de sesión)
     if (!descargado) {
       try {
         const resp = await context.request.get(urlPdf, {
@@ -263,9 +289,7 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
       resultado.pdfPath = destino;
       log(`PDF descargado: ${destino}`);
     } else {
-      // Incluimos el token completo (para decodificar exp) y el instante actual.
-      const tok = (urlPdf || '').split('tokendoc=')[1] || '';
-      resultado.error = `No se pudo descargar el PDF. [${diag || 'sin diagnóstico'}] ahora:${Math.floor(Date.now()/1000)} token:${tok}`;
+      resultado.error = `No se pudo descargar el PDF público. [${diag || 'sin diagnóstico'}]`;
     }
     return resultado;
   } catch (e) {

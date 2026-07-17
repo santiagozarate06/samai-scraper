@@ -80,6 +80,7 @@ app.post('/consultar', async (req, res) => {
       encontrado: r.encontrado,
       ultimaActuacion: r.ultimaActuacion,
       tienePdf: r.tienePdf,
+      pdfReservado: r.pdfReservado || false, // doc existe pero es reservado/clasificado
       pdfNombre,        // nombre sugerido del archivo
       pdfBase64,        // ← el PDF en base64; n8n lo convierte y sube a Drive
       error: r.error,
