@@ -127,6 +127,12 @@ export async function consultarSamai(radicadoRaw, opts = {}) {
     let objetivo = filas[0];
     if (forzarConAnexo) {
       const tieneAnexo = (f) => f.celdas.some((c) => /^\d+$/.test(c) && +c >= 1 && +c <= 20);
+      // Diagnóstico: listar actuaciones con anexo y su fila (para saber qué hay disponible)
+      if (process.env.PRUEBA_PDF === '2') {
+        const conAnexo = filas.filter(tieneAnexo).slice(0, 8)
+          .map((f) => `[idx${f.idx}:${f.celdas.map((x) => x.slice(0, 14)).join('|')}]`);
+        resultado._diagFilas = conAnexo;
+      }
       // PRUEBA_PDF=2 → forzar una actuación con anexo que NO sea clasificada/reservada
       // (para probar la descarga de un PDF público). PRUEBA_PDF=1 → la primera con anexo.
       let cand = null;

@@ -84,6 +84,7 @@ app.post('/consultar', async (req, res) => {
       pdfNombre,        // nombre sugerido del archivo
       pdfBase64,        // ← el PDF en base64; n8n lo convierte y sube a Drive
       error: r.error,
+      _diagFilas: r._diagFilas, // solo con PRUEBA_PDF=2, para diagnóstico
     });
   } catch (e) {
     console.error('Error:', e.message);
